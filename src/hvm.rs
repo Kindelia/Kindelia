@@ -1,3 +1,16 @@
+/*
+- Compound action!
+
+- fun rules arities are not being checked
+- ctr arity defaulting to 0.
+  - 0-ary constructors should be declared
+  - non-existing constructors should be checked
+
+- Why u128
+  - We had only 30-bit pointers on Lnks which limited
+    greatly the total amount of addressable memory
+*/
+
 #![allow(clippy::identity_op)]
 #![allow(dead_code)]
 #![allow(non_snake_case)]
@@ -41,7 +54,7 @@ pub enum Oper {
 pub struct Var {
   pub name : u128,         // this variable's name
   pub param: u128,         // in what parameter is this variable located?
-  pub field: Option<u128>, // in what field is this variabled located? (if any)
+  pub field: Option<u128>, // in what field is this variable located? (if any)
   pub erase: bool,         // should this variable be collected (because it is unused)?
 }
 
@@ -63,8 +76,10 @@ pub struct Func {
 }
 
 // A file is a map of `FuncID -> Function`
+// ?? rename to `Program` ?
 #[derive(Clone, Debug)]
 pub struct File {
+  // TODO: investigate u64/u128 collisions
   pub funcs: HashMap<u64, Arc<Func>, BuildHasherDefault<NoHashHasher<u64>>>,
 }
 
@@ -99,6 +114,7 @@ pub struct Blob {
 
 // HVM's memory state (nodes, functions, metadata, statistics)
 #[derive(Debug)]
+// ?? Rename to `Layer`
 pub struct Heap {
   pub data: Blob, // memory block holding HVM nodes
   pub disk: Disk, // points to stored function states
@@ -465,6 +481,7 @@ impl Heap {
     self.next = absorb_u128(self.next, other.next, overwrite);
   }
   fn clear(&mut self) {
+    // ?? Will this always be faster than reallocating?
     self.data.clear();
     self.disk.clear();
     self.file.clear();
@@ -479,6 +496,7 @@ impl Heap {
   }
 }
 
+// TODO: move to `impl` ::new ??
 pub fn init_heap() -> Heap {
   Heap {
     data: init_heapdata(U128_NONE),
@@ -505,6 +523,7 @@ pub fn init_heapdata(zero: u128) -> Blob {
 impl Blob {
   fn write(&mut self, idx: usize, val: u128) {
     unsafe {
+      // ?? What ensures no memory overflow?
       let got = self.data.get_unchecked_mut(idx);
       if *got == U128_NONE {
         self.used.push(idx);
@@ -532,11 +551,12 @@ impl Blob {
         let other_val = other.data.get_unchecked_mut(*idx);
         let self_val = self.data.get_unchecked_mut(*idx);
         if overwrite || *self_val == U128_NONE {
+          // ?? I think the is a micro-optimization here when `self_val == NONE`
           self.write(*idx, *other_val);
         }
       }
     }
-    other.clear();
+    other.clear();  // ?????????????
   }
 }
 
@@ -574,12 +594,12 @@ impl Disk {
 
 impl File {
   fn write(&mut self, fid: u128, val: Arc<Func>) {
-    if !self.funcs.contains_key(&(fid as u64)) {
+    // ?? Should this assert non-existing key?
+    debug_assert!(!self.funcs.contains_key(&(fid as u64)));
       self.funcs.insert(fid as u64, val);
-    }
   }
   fn read(&self, fid: u128) -> Option<Arc<Func>> {
-    return self.funcs.get(&(fid as u64)).map(|x| x.clone());
+    return self.funcs.get(&(fid as u64)).cloned();
   }
   fn clear(&mut self) {
     self.funcs.clear();
@@ -595,12 +615,12 @@ impl File {
 
 impl Arit {
   fn write(&mut self, fid: u128, val: u128) {
-    if !self.arits.contains_key(&(fid as u64)) {
+    // ?? Should this assert non-existing key?
+    // debug_assert!(!self.arits.contains_key(&(fid as u64)));
       self.arits.insert(fid as u64, val);
-    }
   }
   fn read(&self, fid: u128) -> Option<u128> {
-    return self.arits.get(&(fid as u64)).map(|x| *x);
+    return self.arits.get(&(fid as u64)).copied();
   }
   fn clear(&mut self) {
     self.arits.clear();
@@ -722,9 +742,9 @@ impl Runtime {
   fn absorb_heap(&mut self, absorber: u64, absorbed: u64, overwrite: bool) {
     // FIXME: can we satisfy the borrow checker without using unsafe pointers?
     unsafe {
-      let a_arr = &mut self.heap as *mut Vec<Heap>;
-      let a_ref = &mut *(&mut (*a_arr)[absorber as usize] as *mut Heap);
-      let b_ref = &mut *(&mut (*a_arr)[absorbed as usize] as *mut Heap);
+      let arr = &mut self.heap as *mut Vec<Heap>;
+      let a_ref = &mut *(&mut (*arr)[absorber as usize] as *mut Heap);
+      let b_ref = &mut *(&mut (*arr)[absorbed as usize] as *mut Heap);
       a_ref.absorb(b_ref, overwrite);
     }
   }
@@ -823,6 +843,7 @@ impl Runtime {
   }
 
   pub fn run_action(&mut self, action: &Action) {
+    // ?? Error handling?
     match action {
       Action::Fun { name, arit, func, init } => {
         println!("- fun {} {}", u128_to_name(*name), arit);
@@ -881,8 +902,6 @@ impl Runtime {
   fn snapshot(&mut self) {
     //println!("tick self.curr={}", self.curr);
     let (included, absorber, deleted, rollback) = rollback_push(self.curr, self.back.clone());
-    //println!("- tick self.curr={}, included={:?} absorber={:?} deleted={:?} rollback={}", self.curr, included, absorber, deleted, view_rollback(&self.back));
-    self.back = rollback;
     if included {
       if let Some(deleted) = deleted {
         if let Some(absorber) = absorber {
@@ -2300,6 +2319,7 @@ pub fn show_term(rt: &Runtime, term: Lnk) -> String {
 // -------
 
 fn head(code: &str) -> char {
+  // ?? Option instead of \0? Files can contain \0.
   return code.chars().take(1).last().unwrap_or('\0');
 }
 

@@ -75,6 +75,7 @@ fn run_cli() -> Result<(), String> {
 
 fn start_node(file: Option<String>) {
   // Reads the file contents
+  // TODO: move this outside
   let file = file.map(|file| std::fs::read_to_string(file).expect("File not found."));
 
   // Node state object
