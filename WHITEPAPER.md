@@ -70,9 +70,9 @@ easily created as Ethereum contracts, without launching a new network. More than
 a decentralized application, Ethereum was the first decentralized computer. Due
 to its quick development, though, it launched with several design mistakes that
 made its base layer considerably less scalable and secure than it could be. In
-2021, the average Ethereum transaction fee rose to as much as 70 USD [citation],
+2021, the average Ethereum transaction fee rose to as much as 70 USD [citation](https://markets.businessinsider.com/news/currencies/ethereum-transaction-gas-fees-high-solana-avalanche-cardano-crypto-blockchain-2021-12#:~:text=The%20average%20transaction%20or%20%22gas,to%20crypto%20exchange%20Kraken's%20analysts.),
 and millionaire smart-contract exploits were so common that websites reported
-their ocurrences daily [citation].
+their ocurrences daily [citation](https://www.theregister.com/2022/04/26/smart_contract_losses/).
 
 - Regarding **scalability**, layer 2 techniques are proposed as a solution, but
   these come with their own compromises. There is value in a more scalable
