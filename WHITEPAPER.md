@@ -1,3 +1,11 @@
+---
+# mainfont: DejaVuSerif.ttf
+# sansfont: DejaVuSans.ttf
+# monofont: DejaVuSansMono.ttf
+monofont: /Users/kelvin/Library/Fonts/Fira Code Regular Nerd Font Complete Mono.otf
+# mathfont: texgyredejavu-math.otf
+---
+
 Kindelia: a peer-to-peer functional computer
 ============================================
 
