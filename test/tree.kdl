@@ -1,0 +1,62 @@
+ctr {Node k v l r}
+ctr {Leaf}
+
+fun (AddEq cond key t) {
+  (AddEq #1 ~ {Node k v l r}) = {Node k (+ v #1) l r}
+  (AddEq #0 key {Node k v l r}) = 
+    dup k.0 k.1 = k;
+    dup key.0 key.1 = key;
+    (AddChild (> key.0 k.0) key.1 {Node k.1 v l r})
+} 
+
+fun (AddChild cond key t) {
+  (AddChild #1 key {Node k v l r}) = {Node k v l (AddAcc key r)}
+  (AddChild #0 key {Node k v l r}) = {Node k v (AddAcc key l) r}
+} 
+
+fun (AddAcc key t) {
+  (AddAcc key {Leaf}) = {Node key #1 {Leaf} {Leaf}}
+  (AddAcc key {Node k v lft rgt}) =
+    dup k.0 k.1 = k;
+    dup key.0 key.1 = key;
+    (AddEq (== k.0 key.0) key.1 {Node k.1 v lft rgt})
+}
+
+ctr {Random_Inc}
+ctr {Random_Get}
+
+fun (Random action) {
+  (Random {Random_Inc}) = 
+    !take x
+    !save (% (+ (* #25214903917 x) #11) #281474976710656)
+    !done #0
+  (Random {Random_Get}) = 
+    !load x
+    !done x
+} with {
+  #1
+}
+
+ctr {Bank_Add acc}
+ctr {Bank_Get}
+
+fun (Bank action) {
+  (Bank {Bank_Add acc}) = 
+    !take t
+    !save (AddAcc acc t)
+    !done #0
+  (Bank {Bank_Get}) = 
+    !load x
+    !done x
+} with {
+  {Leaf}
+}
+
+run {
+  !call ~   'Random' [{Random_Inc}]
+  !call acc 'Random' [{Random_Get}]
+  !call ~   'Bank' [{Bank_Add acc }]
+  !call b   'Bank' [{Bank_Get}]
+  !done b
+  // !done (AddAcc #1 {Leaf})
+}

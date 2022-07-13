@@ -2619,9 +2619,10 @@ fn count_uses(term: &Term, name: u128) -> u128 {
 // - Every non-erased variable is used exactly once
 // - Every erased variable is never used
 pub fn is_linear(term: &Term) -> bool {
-  match term {
+  // println!("{}", view_term(term));
+  let res = match term {
     Term::Var { name: var_name } => {
-      return true;
+      true
     }
     Term::Dup { nam0, nam1, expr, body } => {
       let expr_linear = is_linear(expr);
@@ -2629,42 +2630,45 @@ pub fn is_linear(term: &Term) -> bool {
         =  (*nam0 == VAR_NONE || count_uses(body, *nam0) == 1)
         && (*nam1 == VAR_NONE || count_uses(body, *nam1) == 1)
         && is_linear(body);
-      return expr_linear && body_linear;
+      expr_linear && body_linear
     }
     Term::Lam { name, body } => {
       let body_linear
         =  (*name == VAR_NONE || count_uses(body, *name) == 1)
         && is_linear(body);
-      return body_linear;
+      body_linear
     }
     Term::App { func, argm } => {
       let func_linear = is_linear(func);
       let argm_linear = is_linear(argm);
-      return func_linear && argm_linear;
+      func_linear && argm_linear
     }
     Term::Ctr { name: ctr_name, args } => {
       let mut linear = true;
       for arg in args {
         linear = linear && is_linear(arg);
       }
-      return linear;
+      linear
     }
     Term::Fun { name: fun_name, args } => {
       let mut linear = true;
       for arg in args {
         linear = linear && is_linear(arg);
       }
-      return linear;
+      linear
     }
     Term::Num { numb } => {
-      return true;
+      true
     }
     Term::Op2 { oper, val0, val1 } => {
       let val0_linear = is_linear(val0);
       let val1_linear = is_linear(val1);
-      return val0_linear && val1_linear;
+      val0_linear && val1_linear
     }
-  }
+  };
+
+  // println!("{}", res);
+  res
 }
 
 // Writes a Term represented as a Rust enum on the Runtime's rt.
@@ -2978,10 +2982,10 @@ pub fn reduce(rt: &mut Runtime, root: u128, mana: u128) -> Result<Ptr, RuntimeEr
       return Err(RuntimeError::NotEnoughMana);
     }
 
-    //if true {
-      //println!("----------------------");
-      //println!("{}", show_term(rt, ask_lnk(rt, root), Some(term)));
-    //}
+    // if true {
+    //   println!("----------------------");
+    //   println!("{}", show_term(rt, ask_lnk(rt, root), Some(term)));
+    // }
 
     if init == 1 {
       match get_tag(term) {
