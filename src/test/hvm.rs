@@ -14,39 +14,35 @@ use crate::{
 use proptest::collection::vec;
 use proptest::proptest;
 use rstest::rstest;
+use rstest_reuse::{apply, template};
 
+#[template]
 #[rstest]
 #[case(&["Count", "Store", "Sub", "Add"], PRE_COUNTER, COUNTER)]
 #[case(&["Bank", "Random", "AddAcc", "AddEq", "AddChild"], PRE_BANK, BANK)]
-pub fn simple_rollback(
-  #[case] fn_names: &[&str],
-  #[case] pre_code: &str,
-  #[case] code: &str,
-  temp_dir: TempDir,
-) {
+fn hvm_cases(#[case] fn_names: &[&str], #[case] pre_code: &str, #[case] code: &str) {}
+
+#[apply(hvm_cases)]
+pub fn simple_rollback(fn_names: &[&str], pre_code: &str, code: &str, temp_dir: TempDir) {
   assert!(rollback_simple(pre_code, code, fn_names, 1000, 1, &temp_dir.path));
 }
 
-#[rstest]
-#[case(&["Count", "Store", "Sub", "Add"], PRE_COUNTER, COUNTER)]
-#[case(&["Bank", "Random", "AddAcc", "AddEq", "AddChild"], PRE_BANK, BANK)]
+#[apply(hvm_cases)]
 pub fn advanced_rollback_in_random_state(
-  #[case] fn_names: &[&str],
-  #[case] pre_code: &str,
-  #[case] code: &str,
+  fn_names: &[&str],
+  pre_code: &str,
+  code: &str,
   temp_dir: TempDir,
 ) {
   let path = [1000, 12, 1000, 24, 1000, 36];
   assert!(rollback_path(pre_code, code, fn_names, &path, &temp_dir.path));
 }
 
-#[rstest]
-#[case(&["Count", "Store", "Sub", "Add"], PRE_COUNTER, COUNTER)]
-#[case(&["Bank", "Random", "AddAcc", "AddEq", "AddChild"], PRE_BANK, BANK)]
+#[apply(hvm_cases)]
 pub fn advanced_rollback_in_saved_state(
-  #[case] fn_names: &[&str],
-  #[case] pre_code: &str,
-  #[case] code: &str,
+  fn_names: &[&str],
+  pre_code: &str,
+  code: &str,
   temp_dir: TempDir,
 ) {
   let mut rt = init_runtime(Some(&temp_dir.path));
@@ -70,23 +66,19 @@ pub fn advanced_rollback_in_saved_state(
   assert_eq!(s2, s3);
 }
 
-#[rstest]
-#[case(&["Count", "Store", "Sub", "Add"], PRE_COUNTER, COUNTER)]
-#[case(&["Bank", "Random", "AddAcc", "AddEq", "AddChild"], PRE_BANK, BANK)]
+#[apply(hvm_cases)]
 pub fn advanced_rollback_run_fail(
-  #[case] fn_names: &[&str],
-  #[case] pre_code: &str,
-  #[case] code: &str,
+  fn_names: &[&str],
+  pre_code: &str,
+  code: &str,
   temp_dir: TempDir,
 ) {
   let path = [2, 1, 2, 1, 2, 1];
   assert!(rollback_path(PRE_COUNTER, COUNTER, &fn_names, &path, &temp_dir.path));
 }
 
-#[rstest]
-#[case(PRE_COUNTER, COUNTER)]
-#[case(PRE_BANK, BANK)]
-pub fn stack_overflow(#[case] pre_code: &str, #[case] code: &str, temp_dir: TempDir) {
+#[apply(hvm_cases)]
+pub fn stack_overflow(fn_names: &[&str], pre_code: &str, code: &str, temp_dir: TempDir) {
   // caused by compute_at function
   let mut rt = init_runtime(Some(&temp_dir.path));
   rt.run_statements_from_code(pre_code, true);
@@ -103,13 +95,11 @@ pub fn stack_overflow2(temp_dir: TempDir) {
   rt.run_statements_from_code(COUNTER_STACKOVERFLOW, false);
 }
 
-#[rstest]
-#[case(&["Count", "Store", "Sub", "Add"], PRE_COUNTER, COUNTER)]
-#[case(&["Bank", "Random", "AddAcc", "AddEq", "AddChild"], PRE_BANK, BANK)]
+#[apply(hvm_cases)]
 pub fn persistence1(
-  #[case] fn_names: &[&str],
-  #[case] pre_code: &str,
-  #[case] code: &str,
+  fn_names: &[&str],
+  pre_code: &str,
+  code: &str,
   #[values(1000, 1500, 2000)] tick: u128,
   temp_dir: TempDir,
 ) {

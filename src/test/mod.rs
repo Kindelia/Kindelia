@@ -1,8 +1,8 @@
 // aux modules
-mod util;
 mod strategies;
+mod util;
 
 // test modules
 mod bits;
-mod hvm;
 mod hasher;
+mod hvm;
