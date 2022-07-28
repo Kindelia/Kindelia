@@ -651,6 +651,7 @@ dependencies = [
  "proptest",
  "rand 0.8.5",
  "rstest",
+ "rstest_reuse",
  "secp256k1",
  "serde",
  "serde_json",
@@ -1215,6 +1216,17 @@ checksum = "5015e68a0685a95ade3eee617ff7101ab6a3fc689203101ca16ebc16f2b89c66"
 dependencies = [
  "cfg-if",
  "proc-macro2",
+ "quote",
+ "rustc_version",
+ "syn",
+]
+
+[[package]]
+name = "rstest_reuse"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9b5aed35457441e7e0db509695ba3932d4c47e046777141c167efe584d0ec17"
+dependencies = [
  "quote",
  "rustc_version",
  "syn",

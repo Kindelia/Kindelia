@@ -223,8 +223,6 @@ impl Drop for TempDir {
   fn drop(&mut self) {
     if let Err(e) = std::fs::remove_dir_all(&self.path) {
       eprintln!("Error removing temp dir: {:?}", e);
-    } else {
-      println!("Removed temp dir: {:?}", self.path);
     }
   }
 }
