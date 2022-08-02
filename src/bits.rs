@@ -343,7 +343,7 @@ pub fn deserialize_message(bits: &BitVec, index: &mut u128, names: &mut Names) -
       Some(Message::GiveMeThatBlock { bhash })
     }
     2 => {
-      let size = (deserialize_fixlen(16, bits, index, names)?.low_u128() + 1) * 5;
+      let size = deserialize_fixlen(16, bits, index, names)?.low_u128();
       let data = deserialize_bytes(size, bits, index, names)?;
       Some(Message::PleaseMineThisTransaction { trans: Transaction::new(data) })
     }

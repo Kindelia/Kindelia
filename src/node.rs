@@ -17,7 +17,7 @@ use std::sync::mpsc::{SyncSender, Receiver};
 use tokio::sync::oneshot;
 
 use std::hash::{BuildHasherDefault};
-use crate::NoHashHasher as NHH;
+use crate::{NoHashHasher as NHH, print_with_timestamp};
 
 use crate::util::*;
 use crate::bits::*;
@@ -96,11 +96,84 @@ pub struct Node {
   pub height     : U256Map<u128>,                    // block_hash -> cached height
   pub results    : U256Map<Vec<StatementResult>>,    // block_hash -> results of the statements in this block
   pub pool       : PriorityQueue<Transaction, u64>,  // transactions to be mined
-  pub peer_id    : HashMap<Address, u128>,           // peer address -> peer id
-  pub peers      : HashMap<u128, Peer>,              // peer id -> peer
-  pub peer_idx   : u128,                             // peer id counter
+  pub peers      : PeersStore,                       // peers store and state control
   pub runtime    : Runtime,                          // Kindelia's runtime
   pub receiver   : Receiver<Request>,                // Receives an API request
+}
+
+// Peers
+// =====
+
+pub struct PeersStore {
+  seen: HashMap<Address, Peer>,
+  active: HashMap<Address, Peer>,
+}
+
+impl PeersStore {
+  pub fn new() -> PeersStore {
+    PeersStore {
+      seen: HashMap::new(),
+      active: HashMap::new(),
+    }
+  }
+
+  pub fn see_peer(&mut self, peer: Peer) {
+    let addr = peer.address;
+    // print_with_timestamp!("- see peer {}", addr);
+    match self.seen.get(&addr) {
+      None => { // New peer, not seen before
+        // print_with_timestamp!("- new peer {}", addr);
+        self.seen.insert(addr, peer);
+        self.active.insert(addr, peer);
+      }
+      Some(index) => { // Peer seen before, but maybe not active
+        // print_with_timestamp!("- peer {} already seen", addr);
+        let old_peer = self.active.get_mut(&addr);
+        match old_peer {
+          None => { // Peer not active, so activate it
+            // print_with_timestamp!("- activating peer {}", addr);
+            self.active.insert(addr, peer);
+          }
+          Some(old_peer) => { // Peer already active, so update it
+            // print_with_timestamp!("\t- old peer {:?}", old_peer);
+            old_peer.seen_at = std::cmp::max(peer.seen_at, old_peer.seen_at);
+            // print_with_timestamp!("\t- new peer {:?}", old_peer);
+          }
+        }
+      }
+    }
+  }
+
+  fn timeout(&mut self) {
+    let mut forget = Vec::new();
+    for (id,peer) in &self.active {
+      // print_with_timestamp!("- Peer {}: {}", id, peer.address);
+      // print_with_timestamp!("... {} < {} {}", peer.seen_at, get_time() - PEER_TIMEOUT, peer.seen_at < get_time() - PEER_TIMEOUT);
+      if peer.seen_at < get_time() - PEER_TIMEOUT {
+        // print_with_timestamp!("... forgetting {}", id);
+        forget.push(peer.address);
+      }
+    }
+    for addr in forget {
+      self.inactivate_peer(&addr);
+    }
+  }
+
+  pub fn inactivate_peer(&mut self, addr: &Address) {
+    self.active.remove(addr);
+  }
+
+  pub fn get_all_active(&self) -> Vec<Peer> {
+    self.active.values().cloned().collect()
+  }
+
+  pub fn get_random_active(&self, amount: u128) -> Vec<Peer> {
+    let amount = amount as usize;
+    let mut rng = rand::thread_rng();
+    let peers = self.active.values().cloned().choose_multiple(&mut rng, amount);
+    // print_with_timestamp!("- get random peers {:?}", peers.iter().map(|p| p.address).collect::<Vec<_>>());
+    peers
+  }
 }
 
 // API
@@ -601,10 +674,10 @@ impl MinerCommunication {
 pub fn miner_loop(mut miner_communication: MinerCommunication) {
   loop {
     if let MinerMessage::Request { prev, body, targ } = miner_communication.read() {
-      //println!("[miner] mining with target: {}", hex::encode(u256_to_bytes(targ)));
+      //print_with_timestamp!("[miner] mining with target: {}", hex::encode(u256_to_bytes(targ)));
       let mined = try_mine(prev, body, targ, MINE_ATTEMPTS);
       if let Some(block) = mined {
-        //println!("[miner] mined a block!");
+        //print_with_timestamp!("[miner] mined a block!");
         miner_communication.write(MinerMessage::Answer { block });
       }
     }
@@ -619,7 +692,7 @@ impl Node {
     kindelia_path: PathBuf,
     init_peers: &Option<Vec<Address>>,
   ) -> (SyncSender<Request>, Self) {
-    let try_ports = [UDP_PORT, UDP_PORT + 1, UDP_PORT + 2];
+    let try_ports = [UDP_PORT, UDP_PORT + 1, UDP_PORT + 2, UDP_PORT + 3];
     let (socket, port) = udp_init(&try_ports).expect("Couldn't open UDP socket.");
     let (query_sender, query_receiver) = mpsc::sync_channel(1);
     let mut node = Node {
@@ -637,9 +710,7 @@ impl Node {
       results    : u256map_from([(ZERO_HASH(), vec![])]),
       tip        : ZERO_HASH(),
       pool       : PriorityQueue::new(),
-      peer_id    : HashMap::new(),
-      peers      : HashMap::new(),
-      peer_idx   : 0,
+      peers      : PeersStore::new(),
       runtime    : init_runtime(None),
       receiver   : query_receiver,
     };
@@ -648,7 +719,7 @@ impl Node {
 
     if let Some(init_peers) = init_peers {
       init_peers.iter().for_each(|address| {
-        return node.see_peer(Peer { address: *address, seen_at: now });
+        return node.peers.see_peer(Peer { address: *address, seen_at: now });
       });
     }
 
@@ -656,43 +727,11 @@ impl Node {
     for &peer_port in try_ports.iter() {
       if peer_port != port {
         let address = Address::IPv4 { val0: 127, val1: 0, val2: 0, val3: 1, port: peer_port };
-        node.see_peer(Peer { address: address, seen_at: now })
+        node.peers.see_peer(Peer { address: address, seen_at: now })
       }
     }
 
     (query_sender, node)
-  }
-
-  pub fn see_peer(&mut self, peer: Peer) {
-    match self.peer_id.get(&peer.address) {
-      None => {
-        // TODO: improve this spaghetti
-        let index = self.peer_idx;
-        self.peer_idx += 1;
-        self.peers.insert(index, peer);
-        self.peer_id.insert(peer.address, index);
-      }
-      Some(index) => {
-        let old_peer = self.peers.get_mut(&index);
-        if let Some(old_peer) = old_peer {
-          // TODO: max
-          old_peer.seen_at = peer.seen_at;
-        }
-      }
-    }
-  }
-
-  pub fn del_peer(&mut self, addr: Address) {
-    if let Some(index) = self.peer_id.get(&addr) {
-      self.peers.remove(&index);
-      self.peer_id.remove(&addr);
-    }
-  }
-
-  pub fn get_random_peers(&mut self, amount: u128) -> Vec<Peer> {
-    let amount = amount as usize;
-    let mut rng = rand::thread_rng();
-    self.peers.values().cloned().choose_multiple(&mut rng, amount)
   }
 
   // Registers a block on the node's database. This performs several actions:
@@ -710,26 +749,26 @@ impl Node {
     // Adding a block might trigger the addition of other blocks
     // that were waiting for it. Because of that, we loop here.
     let mut must_include = vec![block.clone()]; // blocks to be added
-    //println!("- add_block");
+    //print_with_timestamp!("- add_block");
     // While there is a block to add...
     while let Some(block) = must_include.pop() {
       let btime = block.time; // the block timestamp
-      //println!("- add block time={}", btime);
+      //print_with_timestamp!("- add block time={}", btime);
       // If block is too far into the future, ignore it
       if btime >= get_time() + DELAY_TOLERANCE {
-        //println!("# new block: too late");
+        //print_with_timestamp!("# new block: too late");
         continue;
       }
       let bhash = block.hash; // hash of the block
       // If we already registered this block, ignore it
       if self.block.get(&bhash).is_some() {
-        //println!("# new block: already in");
+        //print_with_timestamp!("# new block: already in");
         continue;
       }
       let phash = block.prev; // hash of the previous block
       // If previous block is available, add the block to the chain
       if self.block.get(&phash).is_some() {
-        //println!("- previous available");
+        //print_with_timestamp!("- previous available");
         let work = get_hash_work(bhash); // block work score
         self.block.insert(bhash, block.clone()); // inserts the block
         self.work.insert(bhash, u256(0)); // inits the work attr
@@ -744,7 +783,7 @@ impl Node {
         let advances_time = btime > self.block[&phash].time;
         // If the PoW hits the target and the block's timestamp is valid...
         if has_enough_work && advances_time {
-          //println!("# new_block: enough work & advances_time");
+          //print_with_timestamp!("# new_block: enough work & advances_time");
           self.work.insert(bhash, self.work[&phash] + work); // sets this block accumulated work
           self.height.insert(bhash, self.height[&phash] + 1); // sets this block accumulated height
           // If this block starts a new period, computes the new target
@@ -775,8 +814,8 @@ impl Node {
           let new_tip = bhash;
           if self.work[&new_tip] > self.work[&old_tip] {
             self.tip = bhash;
-            //println!("- hash: {:x}", bhash);
-            //println!("- work: {}", self.work[&new_tip]);
+            //print_with_timestamp!("- hash: {:x}", bhash);
+            //print_with_timestamp!("- work: {}", self.work[&new_tip]);
             if true {
               // Block reorganization (* marks blocks for which we have runtime snapshots):
               // tick: |  0 | *1 |  2 |  3 |  4 | *5 |  6 | *7 | *8 |
@@ -812,7 +851,7 @@ impl Node {
               // 4. Reverts the runtime to a state older than that block
               //    On the example above, we'd find `runtime.tick = 1`
               let mut tick = self.height[&old_bhash];
-              //println!("- tick: old={} new={}", self.runtime.get_tick(), tick);
+              //print_with_timestamp!("- tick: old={} new={}", self.runtime.get_tick(), tick);
               self.runtime.rollback(tick);
               // 5. Finds the last block included on the reverted runtime state
               //    On the example above, we'd find `new_bhash = B`
@@ -849,13 +888,13 @@ impl Node {
   }
 
   pub fn compute_block(&mut self, block: &Block) {
-    //println!("Computing block...");
-    //println!("==================");
+    //print_with_timestamp!("Computing block...");
+    //print_with_timestamp!("==================");
     let transactions = extract_transactions(&block.body);
     let mut statements = Vec::new();
     for transaction in transactions {
       if let Some(statement) = transaction.to_statement() {
-        //println!("- {}", view_statement(&statement));
+        //print_with_timestamp!("- {}", view_statement(&statement));
         statements.push(statement);
       }
     }
@@ -1009,9 +1048,10 @@ impl Node {
   // Sends a block to a target address; also share some random peers
   // FIXME: instead of sharing random peers, share recently active peers
   pub fn send_blocks_to(&mut self, addrs: Vec<Address>, gossip: bool, blocks: Vec<Block>, share_peers: u128) {
-    //println!("- sending block: {:?}", block);
-    let peers = self.get_random_peers(share_peers);
+    //print_with_timestamp!("- sending block: {:?}", block);
+    let peers = self.peers.get_random_active(share_peers);
     let msg = Message::NoticeTheseBlocks { gossip, blocks, peers };
+    // print_with_timestamp!("- sending block: {:?}", msg);
     udp_send(&mut self.socket, addrs, &msg);
   }
 
@@ -1062,7 +1102,8 @@ impl Node {
 
   pub fn handle_message(&mut self, addr: Address, msg: &Message) {
     if addr != (Address::IPv4 { val0: 127, val1: 0, val2: 0, val3: 1, port: self.port }) {
-      self.see_peer(Peer { address: addr, seen_at: get_time() });
+      // print_with_timestamp!("- received message from {:?}: {:?}", addr, msg);
+      self.peers.see_peer(Peer { address: addr, seen_at: get_time() });
       match msg {
         // Someone asked a block
         Message::GiveMeThatBlock { bhash } => {
@@ -1088,7 +1129,7 @@ impl Node {
 
           // Notice received peers
           for peer in peers {
-            self.see_peer(*peer);
+            self.peers.see_peer(*peer);
           }
 
           // Adds the block to the database
@@ -1103,9 +1144,9 @@ impl Node {
         }
         // Someone sent us a transaction to mine
         Message::PleaseMineThisTransaction { trans } => {
-          //println!("- Transaction added to pool:");
-          //println!("-- {:?}", trans.data);
-          //println!("-- {}", if let Some(st) = trans.to_statement() { view_statement(&st) } else { String::new() });
+          //print_with_timestamp!("- Transaction added to pool:");
+          //print_with_timestamp!("-- {:?}", trans.data);
+          //print_with_timestamp!("-- {}", if let Some(st) = trans.to_statement() { view_statement(&st) } else { String::new() });
           if self.pool.get(&trans).is_none() {
             self.pool.push(trans.clone(), trans.hash.low_u64());
             self.gossip(5, msg);
@@ -1116,7 +1157,7 @@ impl Node {
   }
 
   pub fn gossip(&mut self, peer_count: u128, message: &Message) {
-    let addrs = self.get_random_peers(peer_count).iter().map(|x| x.address).collect();
+    let addrs = self.peers.get_random_active(peer_count).iter().map(|x| x.address).collect();
     udp_send(&mut self.socket, addrs, message);
   }
 
@@ -1125,28 +1166,15 @@ impl Node {
   }
 
   fn broadcast_tip_block(&mut self) {
-    let addrs  = self.peers.values().map(|x| x.address).collect();
+    let addrs  = self.peers.get_all_active().iter().map(|x| x.address).collect();
     let blocks = vec![self.block[&self.tip].clone()];
     self.send_blocks_to(addrs, true, blocks, 3);
   }
 
   fn gossip_tip_block(&mut self, peer_count: u128) {
-    let addrs  = self.get_random_peers(peer_count).iter().map(|x| x.address).collect();
+    let addrs  = self.peers.get_random_active(peer_count).iter().map(|x| x.address).collect();
     let blocks = vec![self.block[&self.tip].clone()];
     self.send_blocks_to(addrs, true, blocks, 3);
-  }
-
-  fn peers_timeout(&mut self) {
-    let mut forget = Vec::new();
-    for (id,peer) in &self.peers {
-      //println!("... {} < {} {}", peer.seen_at, get_time() - PEER_TIMEOUT, peer.seen_at < get_time() - PEER_TIMEOUT);
-      if peer.seen_at < get_time() - PEER_TIMEOUT {
-        forget.push(peer.address);
-      }
-    }
-    for addr in forget {
-      self.del_peer(addr);
-    }
   }
 
   fn load_blocks(&mut self) {
@@ -1157,7 +1185,7 @@ impl Node {
       file_paths.push(entry.unwrap().path());
     }
     file_paths.sort();
-    println!("Loading {} blocks from disk...", file_paths.len());
+    // print_with_timestamp!("Loading {} blocks from disk...", file_paths.len());
     for file_path in file_paths {
       let buffer = std::fs::read(file_path.clone()).unwrap();
       let block = deserialized_block(&bytes_to_bitvec(&buffer)).unwrap();
@@ -1166,9 +1194,9 @@ impl Node {
   }
 
   fn ask_mine(&self, miner_communication: &mut MinerCommunication, body: Body) {
-    //println!("Asking miner to mine:");
+    //print_with_timestamp!("Asking miner to mine:");
     //for transaction in extract_transactions(&body) {
-      //println!("- statement: {}", view_statement(&transaction.to_statement().unwrap()));
+      //print_with_timestamp!("- statement: {}", view_statement(&transaction.to_statement().unwrap()));
     //}
     miner_communication.write(MinerMessage::Request {
       prev: self.tip,
@@ -1232,7 +1260,7 @@ impl Node {
     debug_assert!(size_avail >= 0);
     debug_assert!(mana_avail >= 0);
 
-    let peers_num = self.peers.len();
+    let peers_num = self.peers.get_all_active().len();
 
     let log = object!{
       event: "heartbeat",
@@ -1262,15 +1290,15 @@ impl Node {
       }
     };
 
-    println!("{}", log);
+    // print_with_timestamp!("{}", log);
   }
 
   pub fn main(mut self, kindelia_path: PathBuf, mut miner_communication: MinerCommunication, mine: bool) -> ! {
 
-    eprintln!("Port: {}", self.port);
-    eprintln!("Initial peers: ");
-    for peer in self.peers.values() {
-      eprintln!("- {}", peer.address);
+    print_with_timestamp!("Port: {}", self.port);
+    print_with_timestamp!("Initial peers: ");
+    for peer in self.peers.get_all_active() {
+      print_with_timestamp!("- {}", peer.address);
     }
 
     // Loads all stored blocks. FIXME: remove the if (used for debugging)
@@ -1304,7 +1332,7 @@ impl Node {
       // Forgets inactive peers
       Task {
         delay: 5_000,
-        action: |node, mc| { node.peers_timeout(); },
+        action: |node, mc| { node.peers.timeout(); },
       },
       // Prints stats
       Task {

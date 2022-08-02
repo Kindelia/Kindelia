@@ -6,9 +6,12 @@ use crate::{
     init_map, name_to_u128, Arits, CompFunc, CompRule, Func, Funcs, Heap, Map, Nodes, Ownrs,
     Rollback, Rule, Runtime, SerializedHeap, Statement, Store, Term, Var,
   },
+  node::{hash_bytes, Address, Block, Body, Message, Peer, Transaction},
 };
+use primitive_types::U256;
 use proptest::{
   arbitrary::any,
+  array,
   collection::{hash_map, vec},
   option, prop_oneof,
   strategy::{Just, Strategy},
@@ -139,35 +142,74 @@ pub fn funcs() -> impl Strategy<Value = Funcs> {
 }
 
 pub fn heap() -> impl Strategy<Value = Heap> {
-  let tuple_strategy = (
-    any::<u128>(),
-    any::<u128>(),
-    any::<u128>(),
-    any::<u128>(),
-    any::<u128>(),
-    any::<u128>(),
-  );
+  let tuple_strategy =
+    (any::<u128>(), any::<u128>(), any::<u128>(), any::<u128>(), any::<u128>(), any::<u128>());
 
-  (tuple_strategy, tuple_strategy, any::<i128>(),nodes(), store(), arits(), ownrs(), funcs()).prop_map(
-    |((uuid, mcap, tick, funs, dups, rwts), (mana, next, meta, hax1, hax0, time), size, memo, disk, arit, ownr, file)| Heap {
-      mcap,
-      disk,
-      arit,
-      ownr,
-      file: Funcs { funcs: init_map() }, // TODO, fix?
-      uuid,
-      memo,
-      tick,
-      funs,
-      dups,
-      rwts,
-      mana,
-      size,
-      next,
-      meta,
-      hax0,
-      hax1,
-      time,
-    },
-  )
+  (tuple_strategy, tuple_strategy, any::<i128>(), nodes(), store(), arits(), ownrs(), funcs())
+    .prop_map(
+      |(
+        (uuid, mcap, tick, funs, dups, rwts),
+        (mana, next, meta, hax1, hax0, time),
+        size,
+        memo,
+        disk,
+        arit,
+        ownr,
+        file,
+      )| Heap {
+        mcap,
+        disk,
+        arit,
+        ownr,
+        file: Funcs { funcs: init_map() }, // TODO, fix?
+        uuid,
+        memo,
+        tick,
+        funs,
+        dups,
+        rwts,
+        mana,
+        size,
+        next,
+        meta,
+        hax0,
+        hax1,
+        time,
+      },
+    )
+}
+
+pub fn u256() -> impl Strategy<Value = U256> {
+  array::uniform32(any::<u8>()).prop_map(|a| U256::from(a))
+}
+
+pub fn body() -> impl Strategy<Value = Body> {
+  vec(any::<u8>(), 0..128).prop_map(|v| Body { data: v })
+}
+
+pub fn block() -> impl Strategy<Value = Block> {
+  (any::<u128>(), any::<u128>(), u256(), body())
+    .prop_map(|(t, m, p, b)| crate::node::new_block(p, m, t, b))
+}
+
+pub fn address() -> impl Strategy<Value = Address> {
+  (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>(), any::<u16>())
+    .prop_map(|(a, b, c, d, e)| Address::IPv4 { val0: a, val1: b, val2: c, val3: d, port: e })
+}
+
+pub fn peer() -> impl Strategy<Value = Peer> {
+  (any::<u32>(), address()).prop_map(|(s, a)| Peer { seen_at: s as u128, address: a })
+}
+
+pub fn transaction() -> impl Strategy<Value = Transaction> {
+  vec(any::<u8>(), 1..128).prop_map(|d| Transaction::new(d))
+}
+
+pub fn message() -> impl Strategy<Value = Message> {
+  prop_oneof![
+    (any::<bool>(), vec(block(), 0..10), vec(peer(), 0..10))
+      .prop_map(|(g, b, p)| Message::NoticeTheseBlocks { gossip: g, blocks: b, peers: p }),
+    (u256()).prop_map(|h| Message::GiveMeThatBlock { bhash: h }),
+    (transaction()).prop_map(|t| Message::PleaseMineThisTransaction { trans: t })
+  ]
 }
